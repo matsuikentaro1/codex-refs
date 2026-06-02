@@ -7,7 +7,7 @@ Codex CLIを使用して学術文献を検索し、結果をCSVファイルに�
 
 ## 実行コマンド
 ```bash
-codex exec --model gpt-5.4 --full-auto --sandbox danger-full-access --skip-git-repo-check --cd <project_directory> "<request>"
+codex exec --model gpt-5.4-mini --full-auto --sandbox danger-full-access --skip-git-repo-check --cd <project_directory> "<request>"
 ```
 
 ### コマンドオプションについて
@@ -218,12 +218,12 @@ CSV列: PubMed_ID, Author, Year, Title, Journal, Volume, Issue, Pages, doi, abst
 
 ### 基本的な文献検索（単発実行）
 ```bash
-codex exec --model gpt-5.4 --full-auto --sandbox danger-full-access --skip-git-repo-check --cd "C:\path\to\project" "「腸内細菌叢とうつ病」に関する論文をPubMedから検索して、CSVファイルに保存してください。保存先: manuscripts/refs.csv。保存方法: 既存CSVがあればdoiで重複チェックし、既存論文は次の空きwhats_interesting列に追記、新規論文は行追加。CSV列: PubMed_ID, Author, Year, Title, Journal, Volume, Issue, Pages, doi, abstract, whats_interesting1, whats_interesting2, whats_interesting3, whats_interesting4, whats_interesting5。whats_interesting1に検索文脈「腸内細菌叢とうつ病」に関連した知見を記載。重要: Pythonスクリプトを一時ファイルとして書き出してから実行すること。PowerShellのhere-stringやパイプ経由のPython実行は禁止。"
+codex exec --model gpt-5.4-mini --full-auto --sandbox danger-full-access --skip-git-repo-check --cd "C:\path\to\project" "「腸内細菌叢とうつ病」に関する論文をPubMedから検索して、CSVファイルに保存してください。保存先: manuscripts/refs.csv。保存方法: 既存CSVがあればdoiで重複チェックし、既存論文は次の空きwhats_interesting列に追記、新規論文は行追加。CSV列: PubMed_ID, Author, Year, Title, Journal, Volume, Issue, Pages, doi, abstract, whats_interesting1, whats_interesting2, whats_interesting3, whats_interesting4, whats_interesting5。whats_interesting1に検索文脈「腸内細菌叢とうつ病」に関連した知見を記載。重要: Pythonスクリプトを一時ファイルとして書き出してから実行すること。PowerShellのhere-stringやパイプ経由のPython実行は禁止。"
 ```
 
 ### 特定論文を指定して検索
 ```bash
-codex exec --model gpt-5.4 --full-auto --sandbox danger-full-access --skip-git-repo-check --cd "C:\path\to\project" "以下の論文をPubMedから検索してCSVに追記してください: (1) Herring et al. 2016 Ann Intern Med suvorexant, (2) Mignot et al. 2022 Lancet Neurol daridorexant。保存先: manuscripts/refs.csv。保存方法: doiで重複チェックし、既存論文は次の空きwhats_interesting列に追記、新規論文は行追加。CSV列: PubMed_ID, Author, Year, Title, Journal, Volume, Issue, Pages, doi, abstract, whats_interesting1, whats_interesting2, whats_interesting3, whats_interesting4, whats_interesting5。whats_interesting列に検索文脈「DORA RCT」に関連した知見を記載。重要: Pythonスクリプトを一時ファイルとして書き出してから実行すること。"
+codex exec --model gpt-5.4-mini --full-auto --sandbox danger-full-access --skip-git-repo-check --cd "C:\path\to\project" "以下の論文をPubMedから検索してCSVに追記してください: (1) Herring et al. 2016 Ann Intern Med suvorexant, (2) Mignot et al. 2022 Lancet Neurol daridorexant。保存先: manuscripts/refs.csv。保存方法: doiで重複チェックし、既存論文は次の空きwhats_interesting列に追記、新規論文は行追加。CSV列: PubMed_ID, Author, Year, Title, Journal, Volume, Issue, Pages, doi, abstract, whats_interesting1, whats_interesting2, whats_interesting3, whats_interesting4, whats_interesting5。whats_interesting列に検索文脈「DORA RCT」に関連した知見を記載。重要: Pythonスクリプトを一時ファイルとして書き出してから実行すること。"
 ```
 
 ### コンテキスト認識検索（原稿テキストから引用を探す）
