@@ -1,0 +1,5 @@
+.secrets/
+trash/
+_tmp_refs_*.csv
+*.pyc
+__pycache__/

@@ -1,82 +1,103 @@
 # codex-refs
 
-[OpenAI Codex CLI](https://github.com/openai/codex) を使って学術文献を検索し、結果をCSVに出力する [Claude Code](https://docs.anthropic.com/en/docs/claude-code) カスタムスラッシュコマンドです。
+Search academic references using [OpenAI Codex CLI](https://github.com/openai/codex) as the search driver, with a bundled deterministic PubMed tool — PMIDs are never fabricated.
 
-## 特徴
+This is a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill designed to build a verified reference CSV (`refs.csv`) for academic manuscripts.
 
-- PubMedを中心に学術文献を検索（書籍・ガイドライン・プレプリントにも対応）
-- PMID・著者・タイトル・DOI・要旨などを構造化してCSVに保存
-- DOIベースの重複チェックで既存CSVへの安全な追記が可能
-- 各文献に最大5つの文脈別知見（`whats_interesting1`〜`5`）を付与
-- 複数テーマの並列検索に対応
-- **コンテキスト認識検索**: 原稿テキストの文脈を分析し、各引用に最適な論文を自動検索
-- **CEC表（Claim–Evidence–Citation）自動生成**: ハルシネーション・引用ドリフト防止のための主張-根拠-引用の対応表を出力
-- **PubMed API検証**: 書誌情報をPubMed E-utilities APIで自動検証・補正
-- **フルテキスト取得**: PMC / Unpaywall経由でOA論文のフルテキストを取得し、具体的な表・図・ページを特定
+## What changed in v2
 
-## 必要環境
+v1 had Codex write PubMed E-utilities code from scratch on every run, which caused persistent issues (PowerShell syntax failures, Unicode mangling, rate limit flailing, and — worst of all — PMID hallucination). v2 bundles a tested `pubmed_search.py` script so Codex only handles search strategy, not plumbing.
+
+| | v1 | v2 |
+|---|---|---|
+| PubMed access | Codex writes code each time | Bundled `pubmed_search.py` |
+| PMID safety | Codex could fabricate PMIDs | All PMIDs come from live esearch/efetch |
+| Modes | Single mode | Mode A (targeted) / Mode B (agentic exploration) |
+| Rate limiting | None | API key support + exponential backoff |
+| Convergence | Codex could loop 20+ times | "3–4 rounds max" rule |
+| CEC table | Inline | Separated to [cec-sheet](https://github.com/matsuikentaro1/codex-refs) skill |
+
+## Features
+
+- **Mode A** (targeted): Claude directly calls `pubmed_search.py` for known/classic references — fastest, minimal tokens
+- **Mode B** (agentic exploration): Codex CLI searches freely for exploratory questions, using `pubmed_search.py` as its only PubMed tool
+- Bibliographic data fetched live from PubMed XML API — zero hallucination
+- DOI/PMID deduplication with safe append to existing CSVs
+- NCBI API key support (optional, ~9 req/s vs 3 req/s without)
+- Exponential backoff for 429/5xx errors
+- `--peek` mode for browsing candidates before committing
+- `--selftest` for connection/key diagnostics
+
+## Requirements
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-- [OpenAI Codex CLI](https://github.com/openai/codex)（`npm install -g @openai/codex`）
-- Python 3
+- [OpenAI Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`)
+- Python 3.8+
 
-## インストール
+## Installation
 
-`.claude/commands/codex-refs.md` をプロジェクトの `.claude/commands/` ディレクトリにコピーしてください。
+### As a Claude Code skill (recommended)
+
+Copy the skill directory to your Claude Code skills folder:
 
 ```bash
 git clone https://github.com/matsuikentaro1/codex-refs.git
-
-mkdir -p /path/to/your/project/.claude/commands
-cp codex-refs/.claude/commands/codex-refs.md /path/to/your/project/.claude/commands/
+cp -r codex-refs ~/.claude/skills/codex-refs
 ```
 
-## 使い方
+Then use it in Claude Code by saying "文献検索" or "/codex-refs".
 
-Claude Code上でスラッシュコマンドを実行します：
+### NCBI API key (optional, recommended)
 
-```
-/codex-refs
-```
+An API key increases the rate limit from 3 to ~9 requests/second. Get one free at [NCBI](https://www.ncbi.nlm.nih.gov/account/settings/).
 
-検索キーワードとCSVファイル名を伝えるだけで、文献検索からCSV保存まで自動で行います。
+```bash
+# Option 1: environment variable
+export NCBI_API_KEY=your_key_here
 
-### できること
-
-- **キーワード検索** — 「腸内細菌叢とうつ病」のようなテーマで論文を検索
-- **特定論文の検索** — 「Herring et al. 2016 Ann Intern Med suvorexant」のように著者・年・ジャーナルを指定
-- **並列検索** — 複数テーマを同時に検索し、結果を1つのCSVに統合
-- **コンテキスト認識検索** — 原稿テキストを貼り付けると、引用マーカーの前後の文脈を分析し、「なぜその引用が必要か」を理解したうえで最適な論文を検索
-
-### CEC表（Claim–Evidence–Citation）
-
-文献検索後、自動的にCECsheet.mdを生成します。
-
-```markdown
-| # | Claim | Evidence | Citation | Support | Notes |
-|---|-------|----------|----------|---------|-------|
-| 1 | 睡眠不足は扁桃体の過活動を… | Fig.2: 断眠群でamygdala活動60%↑ | Yoo SS et al. (2007) Curr Biol. PMID:17956744 | direct support | |
-| 2 | 情動調節障害が生じる | [abstract only] "emotional dysregulation..." | Walker MP (2009) Ann N Y Acad Sci. PMID:19338508 | partial support | ⚠ フルテキスト未取得 |
+# Option 2: file (gitignored)
+mkdir -p ~/.claude/skills/codex-refs/.secrets
+echo "your_key_here" > ~/.claude/skills/codex-refs/.secrets/ncbi_api_key.txt
 ```
 
-- **ハルシネーション防止**: Citation列の書誌情報はPubMed APIで検証済みのデータのみ使用
-- **フルテキスト活用**: PMC・Unpaywallからフルテキストを取得し、具体的な表・図・ページを特定
-- **Support Level**: direct support / partial support / background / contraevidence の4段階で自動判定
-- **追記・更新対応**: ユーザーが手動でEvidence列やNotes列を編集・補完可能。再検索時は既存内容を保持したまま新セクションを追記
+## Standalone usage
 
-### コンテキスト認識検索の例
+The `pubmed_search.py` script works independently of Claude Code:
 
+```bash
+# Browse candidates (no CSV write)
+python scripts/pubmed_search.py --query "insomnia cognitive behavioral therapy" --peek
+
+# Commit selected PMIDs to CSV
+python scripts/pubmed_search.py --keep 33069326,30353868 \
+    --note "33069326=CBT-I meta-analysis; 30353868=long-term outcomes" \
+    --out refs.csv
+
+# Connection/key self-test
+python scripts/pubmed_search.py --selftest
 ```
-以下の文章の引用を検索してください:
 
-睡眠不足は扁桃体の過活動と前頭前皮質の抑制機能低下を引き起こし[要引用1]、
-これにより情動調節障害が生じる[要引用2]。
+Exit codes: `0` = success / `3` = 0 hits / `4` = connection/key error / `1` = other
 
-CSVファイル: refs.csv
-```
+## CSV schema
 
-Claude Codeが各引用の文脈（主張の内容・必要なエビデンスの種類・適切な検索キーワード）を分析してからCodex CLIに検索を指示するため、的中率の高い文献が得られます。
+| Column | Description |
+|--------|-------------|
+| PubMed_ID | PMID (always from live API) |
+| Author | Semicolon-separated author list |
+| Year | Publication year |
+| Title | Article title |
+| Journal | ISO abbreviation |
+| Volume, Issue, Pages | Standard bibliographic fields |
+| doi | DOI |
+| abstract | Full abstract text |
+| whats_interesting1–5 | Selection rationale (why this paper was chosen) |
 
-## ライセンス
+## Related tools
+
+- [endnote-insert](https://github.com/matsuikentaro1/endnote-insert) — Convert citation markers in .docx to EndNote field codes
+- [PubMed2EndNote](https://github.com/matsuikentaro1/pubmed2endnote) — Chrome extension for interactive citation insertion
+
+## License
 
 MIT
