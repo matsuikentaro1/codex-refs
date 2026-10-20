@@ -4,6 +4,19 @@ Search academic references using [OpenAI Codex CLI](https://github.com/openai/co
 
 This is a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill designed to build a verified reference CSV (`refs.csv`) for academic manuscripts.
 
+## What changed in v3
+
+v3 borrows ideas from [imozuru](https://github.com/MaryCache/imozuru) and from systematic-review citation searching (snowballing), while keeping the rule that every PMID comes from a live PubMed fetch.
+
+| | v2 | v3 |
+|---|---|---|
+| Stopping rule | "3–4 rounds max" | Each claim is decomposed into conditions (population, design, outcome…); stop when every condition has a verified supporting sentence |
+| Search routes | Keyword search only (Mode A/B) | Adds **Mode C: citation chaining**, which follows backward references, forward citations, similar articles, same-author papers, and the reference lists of open-access full text or PDFs |
+| Citation sources | — | NIH iCite + PubMed elink + Europe PMC + OpenAlex, merged (fewer gaps for recent papers) |
+| Selection rationale | Free-text note written by the LLM | `--quote` records a sentence copied **verbatim** from the abstract and checks it against the fetched abstract. Paraphrases are rejected. `--verify-csv` re-checks the whole CSV |
+| Convergence check | — | Mode B runs two independent routes (MeSH vs free text), and their overlap shows when results stop changing (capture–recapture idea). Mode C reports the share of results already known via `--known` |
+| Audit trail | — | `claims.md` and `search_log.md` record the queries, the seed papers, the counts, and why each search stopped |
+
 ## What changed in v2
 
 v1 had Codex write PubMed E-utilities code from scratch on every run, which caused persistent issues (PowerShell syntax failures, Unicode mangling, rate limit flailing, and — worst of all — PMID hallucination). v2 bundles a tested `pubmed_search.py` script so Codex only handles search strategy, not plumbing.
@@ -73,11 +86,30 @@ python scripts/pubmed_search.py --keep 33069326,30353868 \
     --note "33069326=CBT-I meta-analysis; 30353868=long-term outcomes" \
     --out refs.csv
 
+# Commit with a verbatim supporting sentence (rejected if not found in the abstract)
+python scripts/pubmed_search.py --keep 36425870 --note "36425870=CLBP pharmacotherapy and sleep SR" \
+    --quote "36425870=Adults with chronic low back pain (CLBP) suffer impaired sleep." --out refs.csv
+
+# Re-verify every quote in a CSV against freshly fetched abstracts
+python scripts/pubmed_search.py --verify-csv refs.csv
+
 # Connection/key self-test
 python scripts/pubmed_search.py --selftest
 ```
 
-Exit codes: `0` = success / `3` = 0 hits / `4` = connection/key error / `1` = other
+Exit codes: `0` = success / `3` = 0 hits / `4` = connection/key error / `5` = quote mismatch / `1` = other
+
+### Citation chaining (Mode C)
+
+```bash
+python scripts/citation_chain.py refs     36425870 --types rct            # backward: reference list
+python scripts/citation_chain.py cites    36425870 --since 2022 --known refs.csv   # forward: citing papers
+python scripts/citation_chain.py similar  41787942                        # PubMed Similar articles
+python scripts/citation_chain.py author   "Craige EA" --seed 36425870     # same author (co-authors used to disambiguate)
+python scripts/citation_chain.py fulltext 36425870 --dir sources          # OA full text (PMC XML, then OA PDF) reference list
+```
+
+`fulltext` only retrieves legally free full text, from PMC or the OA location that OpenAlex reports. Paywalled papers are reported as unreachable. Reference entries that cannot be mapped to a PMID are listed as unresolved and are never guessed. PDF parsing needs `pdftotext` (poppler).
 
 ## CSV schema
 
@@ -91,7 +123,7 @@ Exit codes: `0` = success / `3` = 0 hits / `4` = connection/key error / `1` = ot
 | Volume, Issue, Pages | Standard bibliographic fields |
 | doi | DOI |
 | abstract | Full abstract text |
-| whats_interesting1–5 | Selection rationale (why this paper was chosen) |
+| whats_interesting1–5 | Selection rationale (why this paper was chosen); verified quotes are appended as `｜原文:"..."` |
 
 ## Related tools
 

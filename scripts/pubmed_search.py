@@ -36,7 +36,16 @@ LLM 側にしてほしいこと（このスクリプトがやらないこと）:
   # 4) 接続・キーの自己診断
   python pubmed_search.py --selftest
 
-終了コード:  0=成功(1件以上) / 3=ヒット0件 / 4=接続/キー異常 / 1=その他エラー
+  # 5) 根拠の一文を抄録と照合して確定（抄録に無い文は書き込まない）
+  python pubmed_search.py --keep 33069326 --note "33069326=理由" \
+      --quote "33069326=Headache disorders were the third leading cause of YLDs" --out _tmp_refs_01.csv
+
+  # 6) 仕上げ: CSV 内の全引用を抄録と再照合
+  python pubmed_search.py --verify-csv refs_20261020.csv
+
+  芋づる（参考文献・被引用・類似・著者・本文の参考文献）は同じフォルダの citation_chain.py。
+
+終了コード:  0=成功(1件以上) / 3=ヒット0件 / 4=接続/キー異常 / 5=原文不一致あり / 1=その他エラー
 
 CSV 列(codex-refs スキーマと一致):
   PubMed_ID, Author, Year, Title, Journal, Volume, Issue, Pages, doi, abstract,
@@ -209,12 +218,101 @@ def efetch(pmids):
                 if aid.get("IdType") == "doi":
                     doi = aid.text or ""
         abst = " ".join("".join(a.itertext()) for a in article.findall(".//Abstract/AbstractText"))
+        # 論文種別（RCT/SR/MA の機械的な 1 次ふるい用。CSV には書かない）
+        ptypes = [pt.text or "" for pt in article.findall(".//PublicationTypeList/PublicationType")]
         out[pmid] = {
             "PubMed_ID": pmid, "Author": "; ".join(authors), "Year": year,
             "Title": title, "Journal": iso, "Volume": vol, "Issue": issue,
             "Pages": pages, "doi": doi, "abstract": abst,
+            "_pubtypes": ptypes,
         }
     return out
+
+
+def efetch_many(pmids, chunk=200):
+    """efetch を chunk 件ずつに分けて呼ぶ（芋づるで数百件になるとき用）。"""
+    uniq = list(dict.fromkeys(p for p in pmids if p))
+    out = {}
+    for i in range(0, len(uniq), chunk):
+        out.update(efetch(uniq[i:i + chunk]))
+    return out
+
+
+# ============================================================
+# 原文照合: 「この論文が主張を支える」根拠の一文を、取得した
+# title+abstract にそのまま在るか機械で確かめる（言い換え・捏造の防壁）
+# ============================================================
+QUOTE_TAG = '｜原文:"'
+
+
+def _norm(s):
+    """照合用の正規化。NFKC・引用符/ダッシュの統一・空白の圧縮のみ（語は変えない）。"""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", s or "")
+    for a, b in (("‘", "'"), ("’", "'"), ("“", '"'), ("”", '"'),
+                 ("–", "-"), ("—", "-"), ("−", "-"), ("‐", "-")):
+        s = s.replace(a, b)
+    return " ".join(s.split())
+
+
+def verify_quote(rec, quote):
+    """quote が title+abstract にそのまま在れば (True, "")。
+    「…」で区切った断片は、順番どおりに在ればよい（省略を許すが言い換えは許さない）。
+    無ければ (False, いちばん近い文)。"""
+    import difflib
+    import re
+    src = _norm(rec.get("Title", "") + " " + rec.get("abstract", ""))
+    parts = [_norm(p) for p in re.split(r"…|\.\.\.", quote) if _norm(p)]
+    if not parts:
+        return False, "（引用が空）"
+    pos = 0
+    for p in parts:
+        i = src.find(p, pos)
+        if i < 0:
+            sents = re.split(r"(?<=[.!?])\s+", src)
+            best = max(sents, key=lambda s: difflib.SequenceMatcher(None, p, s).ratio(), default="")
+            return False, best
+        pos = i + len(p)
+    return True, ""
+
+
+def parse_quotes(spec):
+    """--quote の書式: 'PMID=原文の一文 || PMID=原文の一文'（文中の ; を壊さないよう || で区切る）。"""
+    quotes = {}
+    for chunk in (spec or "").split("||"):
+        pid, sep, txt = chunk.strip().partition("=")
+        if sep and pid.strip().isdigit() and txt.strip():
+            quotes[pid.strip()] = txt.strip()
+    return quotes
+
+
+def verify_csv(path):
+    """refs CSV 内の ｜原文:"..." を、PubMed から抄録を取り直して全件照合する（最終チェック）。"""
+    import re
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    recs = efetch_many([r.get("PubMed_ID", "") for r in rows])
+    n_q, bad, noquote = 0, [], []
+    for r in rows:
+        pmid = r.get("PubMed_ID", "")
+        qs = []
+        for col in FIELDNAMES[10:]:
+            qs += re.findall(r'｜原文:"(.*?)"(?=$|\s|｜)', r.get(col, "") or "")
+        if not qs:
+            noquote.append(pmid)
+            continue
+        for q in qs:
+            n_q += 1
+            ok, near = verify_quote(recs.get(pmid, {}), q)
+            if not ok:
+                bad.append((pmid, q, near))
+    print(f"[verify] {len(rows)} 件中 原文つき {len(rows) - len(noquote)} 件・引用 {n_q} 本を照合")
+    for pmid, q, near in bad:
+        print(f"  ✗ PMID {pmid}: 抄録に無い →「{q}」\n      近い文:「{near}」")
+    if noquote:
+        print(f"  （原文なし）PMID: {', '.join(noquote)}")
+    print("[verify] OK: 全引用が抄録に在る" if not bad else f"[verify] NG: {len(bad)} 本が不一致")
+    return 0 if not bad else 5
 
 
 # ============================================================
@@ -308,6 +406,9 @@ def main():
     ap.add_argument("--mindate", help="発行年の下限（例 2010）")
     ap.add_argument("--maxdate", help="発行年の上限")
     ap.add_argument("--peek", action="store_true", help="候補一覧を表示するだけ（CSV 書込なし）")
+    ap.add_argument("--quote", help="--keep 時の根拠の一文（抄録からそのまま）。'PMID=文 || PMID=文'。"
+                                    "抄録に無ければその PMID は書き込まない")
+    ap.add_argument("--verify-csv", help="CSV 内の ｜原文:\"...\" を抄録と全件照合して終了")
     ap.add_argument("--selftest", action="store_true", help="接続/キーの自己診断")
     args = ap.parse_args()
 
@@ -328,10 +429,17 @@ def main():
             print(f"[selftest] 失敗: {e}")
             sys.exit(4)
 
+    if args.verify_csv:
+        try:
+            sys.exit(verify_csv(args.verify_csv))
+        except Exception as e:
+            print(f"[error] 照合失敗: {e}")
+            sys.exit(1)
+
     try:
         if args.keep:
             pmids = [p.strip() for p in args.keep.split(",") if p.strip()]
-            recs = efetch(pmids)
+            recs = efetch_many(pmids)
             missing = [p for p in pmids if p not in recs]
             if missing:
                 sys.stderr.write(f"[warn] efetch で取得できなかった PMID: {', '.join(missing)}\n")
@@ -360,7 +468,8 @@ def main():
     items = list(recs.values())
     print(f"\n=== 候補 {len(items)} 件 ===")
     for rec in items:
-        print(_fmt_candidate(rec))
+        # PMID 指定で覗くときは抄録を切らない（--quote に写す文を探すため）
+        print(_fmt_candidate(rec, abstract_chars=10 ** 6 if args.keep else 320))
 
     if args.peek or not args.out:
         print("\n[peek] CSV 未書込。abstract を読んで relevance を判断し、"
@@ -369,12 +478,29 @@ def main():
         sys.exit(0)
 
     notes = parse_notes(args.note, list(recs.keys()))
-    added, skipped = append_csv(args.out, recs, notes)
+    rejected = []
+    if args.quote:
+        for pmid, q in parse_quotes(args.quote).items():
+            if pmid not in recs:
+                continue
+            ok, near = verify_quote(recs[pmid], q)
+            if ok:
+                notes[pmid] = (notes.get(pmid, "") + " " + QUOTE_TAG + q + '"').strip()
+            else:
+                rejected.append(pmid)
+                print(f"\n[quote ✗] PMID {pmid}: 引用が抄録にそのまま無い → 書き込まない\n"
+                      f"    渡した文:「{q}」\n    近い文  :「{near}」")
+        for pmid in rejected:
+            recs.pop(pmid)
+    added, skipped = append_csv(args.out, recs, notes) if recs else ([], [])
     print(f"\n[CSV] {args.out} へ 追加 {len(added)} 件 / 既存追記 {len(skipped)} 件")
     if added:
         print("  追加 PMID: " + ", ".join(added))
     if skipped:
         print("  既存(理由を追記) PMID: " + ", ".join(skipped))
+    if rejected:
+        print("  原文不一致で未書込 PMID: " + ", ".join(rejected) + "（抄録の文をそのまま写して再実行）")
+        sys.exit(5)
     sys.exit(0)
 
 

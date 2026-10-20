@@ -1,5 +1,11 @@
+# 機密情報は絶対にコミット・共有しない
 .secrets/
-trash/
-_tmp_refs_*.csv
-*.pyc
+*.key
+*api_key*.txt
 __pycache__/
+*.pyc
+# 検索の一時生成物
+_tmp_refs_*.csv
+_tmp_search_*.py
+candidates_*.json
+trash/
